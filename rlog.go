@@ -1,4 +1,4 @@
-package rtego
+package rlog
 
 // We only provide a standard interface for logging here, then the extensions in
 // one app could have a chance to use the same logging implementation.
