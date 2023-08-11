@@ -1,5 +1,7 @@
 package rlog
 
+import "sync"
+
 // We only provide a standard interface for logging here, then the extensions in
 // one app could have a chance to use the same logging implementation.
 //
@@ -10,14 +12,10 @@ package rlog
 // And once the 'slog' is released, we could use it directly and remove this.
 
 const (
-	ATTR_KEY_MODULE     = "module"
-	DEFAULT_MODULE_NAME = "default"
+	KEY_DEFAULT_LOGGER = "default"
 )
 
-var _default_handler LogHandler
-var _default_r_log = &_r_logger{
-	module: DEFAULT_MODULE_NAME,
-}
+var loggers = sync.Map{} // map[string]ILogger
 
 type LogLevel int8
 
@@ -44,8 +42,7 @@ type LogHandler interface {
 	Handle(r LogRecord)
 }
 
-type _r_logger struct {
-	module  string
+type r_logger struct {
 	handler LogHandler
 }
 
@@ -56,7 +53,7 @@ type ILogger interface {
 	Error(msg string, args ...any)
 }
 
-func (l *_r_logger) doLog(msg string, level LogLevel, args ...any) {
+func (l *r_logger) doLog(msg string, level LogLevel, args ...any) {
 	size := len(args)/2 + 1 // 1 for the module name.
 	attrs := make([]LogAttr, size)
 
@@ -67,11 +64,6 @@ func (l *_r_logger) doLog(msg string, level LogLevel, args ...any) {
 		}
 	}
 
-	attrs[size-1] = LogAttr{
-		Key:   ATTR_KEY_MODULE,
-		Value: l.module,
-	}
-
 	l.handler.Handle(LogRecord{
 		Message: msg,
 		Attrs:   attrs,
@@ -79,63 +71,57 @@ func (l *_r_logger) doLog(msg string, level LogLevel, args ...any) {
 	})
 }
 
-func (l *_r_logger) Debug(msg string, args ...any) {
+func (l *r_logger) Debug(msg string, args ...any) {
 	if l.handler.Enabled(LogLevelDebug) {
 		l.doLog(msg, LogLevelDebug, args...)
 	}
 }
 
-func (l *_r_logger) Info(msg string, args ...any) {
+func (l *r_logger) Info(msg string, args ...any) {
 	if l.handler.Enabled(LogLevelInfo) {
 		l.doLog(msg, LogLevelInfo, args...)
 	}
 }
 
-func (l *_r_logger) Warn(msg string, args ...any) {
+func (l *r_logger) Warn(msg string, args ...any) {
 	if l.handler.Enabled(LogLevelWarn) {
 		l.doLog(msg, LogLevelWarn, args...)
 	}
 }
 
-func (l *_r_logger) Error(msg string, args ...any) {
+func (l *r_logger) Error(msg string, args ...any) {
 	if l.handler.Enabled(LogLevelError) {
 		l.doLog(msg, LogLevelError, args...)
 	}
 }
 
+// Register the handler if not absent.
+//
 // Set the logging implementation with this function, this function must be
 // called before 'GetDefaultLogger()' or 'GetLogger()'. In general, this
 // function shall be called in the 'main()' function, before starting the rte
 // app.
-func SetRLogDefaultHandler(h LogHandler) {
-	_default_handler = h
-	_default_r_log.handler = h
+func RegisterLogHandler(name string, h LogHandler) (ok bool) {
+	_, loaded := loggers.LoadOrStore(name, h)
+
+	if loaded {
+		return false
+	}
+
+	return true
 }
 
 func GetDefaultLogger() ILogger {
-	if _default_handler == nil {
-		panic("Please set the default handler first.")
-	}
-
-	return _default_r_log
+	return GetLogger(KEY_DEFAULT_LOGGER)
 }
 
-// Extensions shall use this function to retrieve a logger.
-//
-// The source code of the extensions are compiled into one executable, so we can
-// not distinguish which extension is the source of the logs based on the call
-// stacks. So the extension could retrieve its own logger by passing its name
-// here, and we will add a 'module' attribute to the log record.
-//
-// The '_default_handler' is preferred to be set before calling this function,
-// so we do not use a mutex lock here.
-func GetLogger(module string) ILogger {
-	if _default_handler == nil {
-		panic("Please set the default handler first.")
-	}
+func GetLogger(handler string) ILogger {
+	logger, ok := loggers.Load(handler)
 
-	return &_r_logger{
-		module:  module,
-		handler: _default_handler,
+	if ok {
+		h := logger.(LogHandler)
+		return &r_logger{handler: h}
+	} else {
+		return nil
 	}
 }
